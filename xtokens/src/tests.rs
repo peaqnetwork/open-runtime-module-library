@@ -1394,7 +1394,7 @@ fn send_with_zero_amount() {
 		);
 	});
 
-	// TODO: should have more tests after https://github.com/paritytech/polkadot/issues/4996
+	// TODO: should have more tests after https://github.com/peaqnetwork/polkadot/issues/4996
 }
 
 #[test]

@@ -744,7 +744,7 @@ macro_rules! impl_benchmark {
 						name: benchmark.as_bytes().to_vec(),
 						components,
 						// TODO: Not supported by V2 syntax as of yet.
-						// https://github.com/paritytech/substrate/issues/13132
+						// https://github.com/peaqnetwork/substrate/issues/13132
 						pov_modes: vec![],
 					}
 				}).collect::<$crate::Vec<_>>()
