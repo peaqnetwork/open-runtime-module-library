@@ -670,6 +670,17 @@ pub mod module {
 				Some(recipient) => recipient,
 				None => recipient,
 			};
+
+			// Check dest and reserve, in case dest is AssetHub and reserve is parent, 
+			// we change transfer_kind to "ToReserve".
+			let dest_chain_part = dest.chain_part().ok_or(Error::<T>::InvalidDest)?;
+			let is_asset_hub_dest = dest_chain_part == Location::new(1, [Parachain(1000)]) || dest_chain_part == Location::new(1, [Parachain(1001)]);
+			let transfer_kind = if is_asset_hub_dest && reserve == Location::parent() {
+				TransferKind::ToReserve
+			} else {
+				transfer_kind
+			};
+
 			let mut msg = match transfer_kind {
 				SelfReserveAsset => Self::transfer_self_reserve_asset(assets, fee, dest, recipient, dest_weight_limit)?,
 				ToReserve => Self::transfer_to_reserve(assets, fee, dest, recipient, dest_weight_limit)?,
