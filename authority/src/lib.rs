@@ -43,7 +43,7 @@ use sp_core::defer;
 use sp_io::hashing::blake2_256;
 use sp_runtime::{
 	traits::{CheckedSub, Dispatchable, Hash, Saturating},
-	ArithmeticError, DispatchError, DispatchResult, Either, RuntimeDebug,
+	ArithmeticError, DispatchError, DispatchResult, Either, Debug,
 };
 use sp_std::prelude::*;
 
@@ -60,7 +60,7 @@ pub use benchmarking::BenchmarkHelper;
 pub use weights::WeightInfo;
 
 /// A delayed origin. Can only be dispatched via `dispatch_as` with a delay.
-#[derive(PartialEq, Eq, Clone, RuntimeDebug, Encode, Decode, TypeInfo, DecodeWithMemTracking)]
+#[derive(PartialEq, Eq, Clone, Debug, Encode, Decode, TypeInfo, DecodeWithMemTracking)]
 pub struct DelayedOrigin<BlockNumber, PalletsOrigin> {
 	/// Number of blocks that this call have been delayed.
 	pub(crate) delay: BlockNumber,

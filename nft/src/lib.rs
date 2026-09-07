@@ -27,7 +27,7 @@ use parity_scale_codec::{Decode, DecodeWithMemTracking, Encode, MaxEncodedLen};
 use scale_info::TypeInfo;
 use sp_runtime::{
 	traits::{AtLeast32BitUnsigned, CheckedAdd, CheckedSub, MaybeSerializeDeserialize, Member, One, Zero},
-	ArithmeticError, DispatchError, DispatchResult, RuntimeDebug,
+	ArithmeticError, DispatchError, DispatchResult, Debug,
 };
 use sp_std::vec::Vec;
 
@@ -35,7 +35,7 @@ mod mock;
 mod tests;
 
 /// Class info
-#[derive(Encode, Decode, DecodeWithMemTracking, Clone, Eq, PartialEq, MaxEncodedLen, RuntimeDebug, TypeInfo)]
+#[derive(Encode, Decode, DecodeWithMemTracking, Clone, Eq, PartialEq, MaxEncodedLen, Debug, TypeInfo)]
 pub struct ClassInfo<TokenId, AccountId, Data, ClassMetadataOf> {
 	/// Class metadata
 	pub metadata: ClassMetadataOf,
@@ -48,7 +48,7 @@ pub struct ClassInfo<TokenId, AccountId, Data, ClassMetadataOf> {
 }
 
 /// Token info
-#[derive(Encode, Decode, DecodeWithMemTracking, Clone, Eq, PartialEq, MaxEncodedLen, RuntimeDebug, TypeInfo)]
+#[derive(Encode, Decode, DecodeWithMemTracking, Clone, Eq, PartialEq, MaxEncodedLen, Debug, TypeInfo)]
 pub struct TokenInfo<AccountId, Data, TokenMetadataOf> {
 	/// Token metadata
 	pub metadata: TokenMetadataOf,

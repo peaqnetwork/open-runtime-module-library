@@ -597,7 +597,7 @@ fn test_decode_bounded_vec() {
 			OptionQuery,
 		>;
 
-		#[derive(TypeInfo, Encode, Decode, Clone, Eq, PartialEq, RuntimeDebug)]
+		#[derive(TypeInfo, Encode, Decode, Clone, Eq, PartialEq, Debug)]
 		pub struct AssetMetadata<Balance, CustomMetadata: Parameter + Member + TypeInfo> {
 			pub decimals: u32,
 			pub name: Vec<u8>,

@@ -27,7 +27,7 @@ pub trait AssetProcessor<AssetId, Metadata> {
 	CloneNoBound,
 	EqNoBound,
 	PartialEqNoBound,
-	RuntimeDebugNoBound,
+	DebugNoBound,
 	MaxEncodedLen,
 	DecodeWithMemTracking,
 )]
