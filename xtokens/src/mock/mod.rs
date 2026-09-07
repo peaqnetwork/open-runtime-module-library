@@ -356,45 +356,57 @@ pub fn relay_ext() -> sp_io::TestExternalities {
 /// which is not true, but good enough to mock the fee payment of XCM execution.
 ///
 /// This mock will always trade `n` amount of weight to `n` amount of tokens.
-pub struct AllTokensAreCreatedEqualToWeight(Location);
+pub struct AllTokensAreCreatedEqualToWeight {
+	asset_location: Location,
+	/// Assets taken as payment. The holding register carries real imbalances, so the trader has to
+	/// hold on to them rather than drop them, and refunds are served out of them.
+	consumed: AssetsInHolding,
+}
 impl WeightTrader for AllTokensAreCreatedEqualToWeight {
 	fn new() -> Self {
-		Self(Location::parent())
+		Self {
+			asset_location: Location::parent(),
+			consumed: AssetsInHolding::new(),
+		}
 	}
 
 	fn buy_weight(
 		&mut self,
 		weight: Weight,
-		payment: AssetsInHolding,
+		mut payment: AssetsInHolding,
 		_context: &XcmContext,
-	) -> Result<AssetsInHolding, XcmError> {
-		let asset_id = payment
-			.fungible
-			.iter()
-			.next()
-			.expect("Payment must be something; qed")
-			.0;
+	) -> Result<AssetsInHolding, (AssetsInHolding, XcmError)> {
+		let Some(Asset {
+			fun: _,
+			id: AssetId(asset_location),
+		}) = payment.fungible_assets_iter().next()
+		else {
+			return Err((payment, XcmError::TooExpensive));
+		};
 		let required = Asset {
-			id: asset_id.clone(),
+			id: AssetId(asset_location.clone()),
 			fun: Fungible(weight.ref_time() as u128),
 		};
 
-		let Asset {
-			fun: _,
-			id: AssetId(ref id),
-		} = &required;
+		let Ok(taken) = payment.try_take(required.into()) else {
+			return Err((payment, XcmError::TooExpensive));
+		};
 
-		self.0 = id.clone();
-
-		let unused = payment.checked_sub(required).map_err(|_| XcmError::TooExpensive)?;
-		Ok(unused)
+		self.asset_location = asset_location;
+		self.consumed.subsume_assets(taken);
+		Ok(payment)
 	}
 
-	fn refund_weight(&mut self, weight: Weight, _context: &XcmContext) -> Option<Asset> {
+	fn refund_weight(&mut self, weight: Weight, _context: &XcmContext) -> Option<AssetsInHolding> {
 		if weight.is_zero() {
+			return None;
+		}
+		let refund: Asset = (self.asset_location.clone(), weight.ref_time() as u128).into();
+		let refunded = self.consumed.saturating_take(refund.into());
+		if refunded.is_empty() {
 			None
 		} else {
-			Some((self.0.clone(), weight.ref_time() as u128).into())
+			Some(refunded)
 		}
 	}
 }
