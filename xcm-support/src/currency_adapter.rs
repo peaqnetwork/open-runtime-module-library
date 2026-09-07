@@ -138,8 +138,9 @@ impl ImbalanceAccounting<u128> for EagerCredit {
 /// Build a holding register entry for an asset this adapter has already moved.
 fn eager_holding(asset: &Asset) -> AssetsInHolding {
 	match asset.fun {
-		Fungibility::Fungible(amount) =>
-			AssetsInHolding::new_from_fungible_credit(asset.id.clone(), Box::new(EagerCredit(amount))),
+		Fungibility::Fungible(amount) => {
+			AssetsInHolding::new_from_fungible_credit(asset.id.clone(), Box::new(EagerCredit(amount)))
+		}
 		Fungibility::NonFungible(instance) => AssetsInHolding::new_from_non_fungible(asset.id.clone(), instance),
 	}
 }
@@ -152,6 +153,16 @@ fn eager_holding(asset: &Asset) -> AssetsInHolding {
 ///
 /// If the asset is known, deposit/withdraw will be handled by `MultiCurrency`,
 /// else by `UnknownAsset` if unknown.
+///
+/// # Composition constraint
+///
+/// `MultiCurrency` moves balances eagerly and cannot produce an `Imbalance`, so the entries this
+/// adapter puts in the holding register are receipts (see [`EagerCredit`]) rather than real
+/// imbalances. They must not reach a component that pours an arbitrary holding imbalance into a
+/// concrete, drop-accounted one via `saturating_subsume` — `xcm_builder::UsingComponents` and
+/// `SingleAssetExchangeAdapter` both do — because that turns a receipt into a resolvable credit
+/// that was never issued. Pair this adapter with a trader that keeps `AssetsInHolding` (such as
+/// `FixedRateOfFungible`) and leave `AssetExchanger` unset.
 #[allow(clippy::type_complexity)]
 pub struct MultiCurrencyAdapter<
 	MultiCurrency,
@@ -217,27 +228,44 @@ impl<
 		};
 
 		// The holding register can hold more than one asset. Deposit them one by one and give back
-		// whatever could not be deposited, so the caller can trap or refund it.
+		// whatever could not be deposited, so the caller can trap or refund it. Amounts are read
+		// with `amount()` rather than `forget_imbalance()`, so an entry this adapter turns out not
+		// to handle is handed back as the very imbalance it arrived as.
 		let mut undeposited = AssetsInHolding::new();
 		let mut failure = None;
 
-		let fungible = what.fungible.into_iter().map(|(id, mut credit)| Asset {
-			id,
-			fun: Fungibility::Fungible(credit.forget_imbalance()),
-		});
-		let non_fungible = what
-			.non_fungible
-			.into_iter()
-			.map(|(id, instance)| Asset { id, fun: Fungibility::NonFungible(instance) });
+		for (id, credit) in what.fungible.into_iter() {
+			let asset = Asset {
+				id: id.clone(),
+				fun: Fungibility::Fungible(credit.amount()),
+			};
+			if failure.is_none() {
+				match deposit_one(&asset) {
+					// `MultiCurrency::deposit` has just issued the amount, so the incoming
+					// imbalance has to be settled: dropping it runs a real credit's pending
+					// accounting, and is a no-op for the `EagerCredit`s this adapter produces.
+					Ok(()) => {
+						drop(credit);
+						continue;
+					}
+					Err(err) => failure = Some(err),
+				}
+			}
+			undeposited.subsume_assets(AssetsInHolding::new_from_fungible_credit(id, credit));
+		}
 
-		for asset in fungible.chain(non_fungible) {
+		for (id, instance) in what.non_fungible.into_iter() {
+			let asset = Asset {
+				id: id.clone(),
+				fun: Fungibility::NonFungible(instance),
+			};
 			if failure.is_none() {
 				match deposit_one(&asset) {
 					Ok(()) => continue,
 					Err(err) => failure = Some(err),
 				}
 			}
-			undeposited.subsume_assets(eager_holding(&asset));
+			undeposited.subsume_assets(AssetsInHolding::new_from_non_fungible(id, instance));
 		}
 
 		match failure {
@@ -266,7 +294,25 @@ impl<
 		Ok(eager_holding(asset))
 	}
 
-	fn transfer_asset(
+	/// Reserve-deposited and teleported-in assets enter the holding register through here.
+	///
+	/// `MultiCurrency` mints on `deposit_asset`, so this only records the notional amount. That
+	/// mirrors the pre-stable2603 executor, which pushed plain amounts into holding and minted at
+	/// `DepositAsset`; minting here as well would issue the asset twice.
+	///
+	/// Assets this adapter cannot map are rejected with `AssetNotFound` rather than claimed, so a
+	/// sibling transactor in a `TransactAsset` tuple still gets its turn — tuple iteration stops at
+	/// the first result that is neither `AssetNotFound` nor `Unimplemented`.
+	fn mint_asset(asset: &Asset, _context: &XcmContext) -> result::Result<AssetsInHolding, XcmError> {
+		CurrencyIdConvert::convert(asset.clone()).ok_or(XcmError::AssetNotFound)?;
+		Match::matches_fungible(asset).ok_or(XcmError::AssetNotFound)?;
+		Ok(eager_holding(asset))
+	}
+
+	/// Implementing `internal_transfer_asset` rather than `transfer_asset` is what makes the
+	/// executor reach `MultiCurrency::transfer`: it only ever calls `transfer_asset_with_surplus`,
+	/// whose default chain dispatches here and otherwise falls back to withdraw + deposit.
+	fn internal_transfer_asset(
 		asset: &Asset,
 		from: &Location,
 		to: &Location,
