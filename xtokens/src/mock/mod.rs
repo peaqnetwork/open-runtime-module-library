@@ -357,15 +357,14 @@ pub fn relay_ext() -> sp_io::TestExternalities {
 ///
 /// This mock will always trade `n` amount of weight to `n` amount of tokens.
 pub struct AllTokensAreCreatedEqualToWeight {
-	asset_location: Location,
 	/// Assets taken as payment. The holding register carries real imbalances, so the trader has to
-	/// hold on to them rather than drop them, and refunds are served out of them.
+	/// hold on to them rather than drop them, and refunds are served out of them. This is also
+	/// what records which asset was bought with, so there is no separate location to keep in sync.
 	consumed: AssetsInHolding,
 }
 impl WeightTrader for AllTokensAreCreatedEqualToWeight {
 	fn new() -> Self {
 		Self {
-			asset_location: Location::parent(),
 			consumed: AssetsInHolding::new(),
 		}
 	}
@@ -376,15 +375,11 @@ impl WeightTrader for AllTokensAreCreatedEqualToWeight {
 		mut payment: AssetsInHolding,
 		_context: &XcmContext,
 	) -> Result<AssetsInHolding, (AssetsInHolding, XcmError)> {
-		let Some(Asset {
-			fun: _,
-			id: AssetId(asset_location),
-		}) = payment.fungible_assets_iter().next()
-		else {
+		let Some(asset_id) = payment.fungible.keys().next().cloned() else {
 			return Err((payment, XcmError::TooExpensive));
 		};
 		let required = Asset {
-			id: AssetId(asset_location.clone()),
+			id: asset_id,
 			fun: Fungible(weight.ref_time() as u128),
 		};
 
@@ -392,7 +387,6 @@ impl WeightTrader for AllTokensAreCreatedEqualToWeight {
 			return Err((payment, XcmError::TooExpensive));
 		};
 
-		self.asset_location = asset_location;
 		self.consumed.subsume_assets(taken);
 		Ok(payment)
 	}
@@ -401,7 +395,10 @@ impl WeightTrader for AllTokensAreCreatedEqualToWeight {
 		if weight.is_zero() {
 			return None;
 		}
-		let refund: Asset = (self.asset_location.clone(), weight.ref_time() as u128).into();
+		let refund = Asset {
+			id: self.consumed.fungible.keys().next()?.clone(),
+			fun: Fungible(weight.ref_time() as u128),
+		};
 		let refunded = self.consumed.saturating_take(refund.into());
 		if refunded.is_empty() {
 			None

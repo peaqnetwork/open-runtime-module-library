@@ -158,9 +158,17 @@ fn eager_holding(asset: &Asset) -> AssetsInHolding {
 ///
 /// `MultiCurrency` moves balances eagerly and cannot produce an `Imbalance`, so the entries this
 /// adapter puts in the holding register are receipts (see [`EagerCredit`]) rather than real
-/// imbalances. They must not reach a component that pours an arbitrary holding imbalance into a
-/// concrete, drop-accounted one via `saturating_subsume` — `xcm_builder::UsingComponents` and
-/// `SingleAssetExchangeAdapter` both do — because that turns a receipt into a resolvable credit
+/// imbalances.
+///
+/// The invariant this rests on: **no other component in the same `XcmConfig` may place a real
+/// imbalance in holding under an `AssetId` that this adapter's `Match` claims.** Receipts and real
+/// imbalances share one untyped `Box<dyn ImbalanceAccounting>` channel, so mixing them silently
+/// converts one into the other — `deposit_asset` settles whatever it is handed, and
+/// `saturating_subsume` merges by amount alone.
+///
+/// In practice that rules out any `Trader` or `AssetExchanger` that builds a concrete,
+/// drop-accounted imbalance out of holding — `xcm_builder::UsingComponents` and
+/// `SingleAssetExchangeAdapter` both do, and either would turn a receipt into a resolvable credit
 /// that was never issued. Pair this adapter with a trader that keeps `AssetsInHolding` (such as
 /// `FixedRateOfFungible`) and leave `AssetExchanger` unset.
 #[allow(clippy::type_complexity)]
@@ -228,44 +236,28 @@ impl<
 		};
 
 		// The holding register can hold more than one asset. Deposit them one by one and give back
-		// whatever could not be deposited, so the caller can trap or refund it. Amounts are read
-		// with `amount()` rather than `forget_imbalance()`, so an entry this adapter turns out not
-		// to handle is handed back as the very imbalance it arrived as.
+		// whatever could not be deposited, so the caller can trap or refund it. Nothing is read
+		// destructively, so an entry this adapter turns out not to handle is handed back as the
+		// very imbalance it arrived as.
 		let mut undeposited = AssetsInHolding::new();
 		let mut failure = None;
 
-		for (id, credit) in what.fungible.into_iter() {
-			let asset = Asset {
-				id: id.clone(),
-				fun: Fungibility::Fungible(credit.amount()),
-			};
+		for holding in what.into_per_asset_holdings() {
 			if failure.is_none() {
-				match deposit_one(&asset) {
-					// `MultiCurrency::deposit` has just issued the amount, so the incoming
-					// imbalance has to be settled: dropping it runs a real credit's pending
-					// accounting, and is a no-op for the `EagerCredit`s this adapter produces.
-					Ok(()) => {
-						drop(credit);
-						continue;
+				// One asset per holding, by construction of `into_per_asset_holdings`.
+				let asset = holding.assets_iter().next();
+				if let Some(asset) = asset {
+					match deposit_one(&asset) {
+						// `MultiCurrency::deposit` has just issued the amount, so the incoming
+						// imbalance has to be settled: letting the holding drop here runs a real
+						// credit's pending accounting, and is a no-op for the `EagerCredit`s this
+						// adapter produces.
+						Ok(()) => continue,
+						Err(err) => failure = Some(err),
 					}
-					Err(err) => failure = Some(err),
 				}
 			}
-			undeposited.subsume_assets(AssetsInHolding::new_from_fungible_credit(id, credit));
-		}
-
-		for (id, instance) in what.non_fungible.into_iter() {
-			let asset = Asset {
-				id: id.clone(),
-				fun: Fungibility::NonFungible(instance),
-			};
-			if failure.is_none() {
-				match deposit_one(&asset) {
-					Ok(()) => continue,
-					Err(err) => failure = Some(err),
-				}
-			}
-			undeposited.subsume_assets(AssetsInHolding::new_from_non_fungible(id, instance));
+			undeposited.subsume_assets(holding);
 		}
 
 		match failure {
