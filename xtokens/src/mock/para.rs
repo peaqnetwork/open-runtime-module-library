@@ -156,7 +156,6 @@ impl Config for XcmConfig {
 	type Trader = AllTokensAreCreatedEqualToWeight;
 	type ResponseHandler = ();
 	type AssetTrap = PolkadotXcm;
-	type AssetClaims = PolkadotXcm;
 	type SubscriptionService = PolkadotXcm;
 	type AssetLocker = PolkadotXcm;
 	type AssetExchanger = ();

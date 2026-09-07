@@ -108,7 +108,6 @@ impl Config for XcmConfig {
 	type Trader = UsingComponents<IdentityFee<Balance>, KsmLocation, AccountId, Balances, ()>;
 	type ResponseHandler = ();
 	type AssetTrap = ();
-	type AssetClaims = ();
 	type SubscriptionService = XcmPallet;
 	type AssetLocker = XcmPallet;
 	type AssetExchanger = ();
