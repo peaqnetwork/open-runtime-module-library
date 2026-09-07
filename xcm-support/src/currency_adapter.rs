@@ -1,4 +1,7 @@
-use frame_support::traits::{ExistenceRequirement, Get};
+use frame_support::traits::{
+	tokens::imbalance::{ImbalanceAccounting, UnsafeConstructorDestructor, UnsafeManualAccounting},
+	ExistenceRequirement, Get,
+};
 use parity_scale_codec::FullCodec;
 use sp_runtime::{
 	traits::{Convert, MaybeSerializeDeserialize, SaturatedConversion},
@@ -93,6 +96,54 @@ impl<
 	}
 }
 
+/// Holding entry for balances that are accounted for eagerly.
+///
+/// Since stable2603 the holding register carries real imbalances, so that dropping one reverts the
+/// underlying accounting. `MultiCurrency` has no imbalance to hand over: its `deposit`, `withdraw`
+/// and `transfer` move the balance straight away. For this adapter the holding entry is therefore a
+/// receipt for work already done, and dropping it must not account for anything. This mirrors the
+/// pre-stable2603 behaviour, where the holding register only carried amounts.
+struct EagerCredit(u128);
+
+impl UnsafeConstructorDestructor<u128> for EagerCredit {
+	fn unsafe_clone(&self) -> Box<dyn ImbalanceAccounting<u128>> {
+		Box::new(EagerCredit(self.0))
+	}
+
+	fn forget_imbalance(&mut self) -> u128 {
+		let amount = self.0;
+		self.0 = 0;
+		amount
+	}
+}
+
+impl UnsafeManualAccounting<u128> for EagerCredit {
+	fn saturating_subsume(&mut self, mut other: Box<dyn ImbalanceAccounting<u128>>) {
+		self.0 = self.0.saturating_add(other.forget_imbalance());
+	}
+}
+
+impl ImbalanceAccounting<u128> for EagerCredit {
+	fn amount(&self) -> u128 {
+		self.0
+	}
+
+	fn saturating_take(&mut self, amount: u128) -> Box<dyn ImbalanceAccounting<u128>> {
+		let taken = self.0.min(amount);
+		self.0 -= taken;
+		Box::new(EagerCredit(taken))
+	}
+}
+
+/// Build a holding register entry for an asset this adapter has already moved.
+fn eager_holding(asset: &Asset) -> AssetsInHolding {
+	match asset.fun {
+		Fungibility::Fungible(amount) =>
+			AssetsInHolding::new_from_fungible_credit(asset.id.clone(), Box::new(EagerCredit(amount))),
+		Fungibility::NonFungible(instance) => AssetsInHolding::new_from_non_fungible(asset.id.clone(), instance),
+	}
+}
+
 /// The `TransactAsset` implementation, to handle `Asset` deposit/withdraw.
 /// Note that teleport related functions are unimplemented.
 ///
@@ -145,18 +196,53 @@ impl<
 		DepositFailureHandler,
 	>
 {
-	fn deposit_asset(asset: &Asset, location: &Location, _context: Option<&XcmContext>) -> Result {
-		match (
-			AccountIdConvert::convert_location(location),
-			CurrencyIdConvert::convert(asset.clone()),
-			Match::matches_fungible(asset),
-		) {
-			// known asset
-			(Some(who), Some(currency_id), Some(amount)) => MultiCurrency::deposit(currency_id, &who, amount)
-				.or_else(|err| DepositFailureHandler::on_deposit_currency_fail(err, currency_id, &who, amount)),
-			// unknown asset
-			_ => UnknownAsset::deposit(asset, location)
-				.or_else(|err| DepositFailureHandler::on_deposit_unknown_asset_fail(err, asset, location)),
+	fn deposit_asset(
+		what: AssetsInHolding,
+		location: &Location,
+		_context: Option<&XcmContext>,
+	) -> result::Result<(), (AssetsInHolding, XcmError)> {
+		let deposit_one = |asset: &Asset| -> Result {
+			match (
+				AccountIdConvert::convert_location(location),
+				CurrencyIdConvert::convert(asset.clone()),
+				Match::matches_fungible(asset),
+			) {
+				// known asset
+				(Some(who), Some(currency_id), Some(amount)) => MultiCurrency::deposit(currency_id, &who, amount)
+					.or_else(|err| DepositFailureHandler::on_deposit_currency_fail(err, currency_id, &who, amount)),
+				// unknown asset
+				_ => UnknownAsset::deposit(asset, location)
+					.or_else(|err| DepositFailureHandler::on_deposit_unknown_asset_fail(err, asset, location)),
+			}
+		};
+
+		// The holding register can hold more than one asset. Deposit them one by one and give back
+		// whatever could not be deposited, so the caller can trap or refund it.
+		let mut undeposited = AssetsInHolding::new();
+		let mut failure = None;
+
+		let fungible = what.fungible.into_iter().map(|(id, mut credit)| Asset {
+			id,
+			fun: Fungibility::Fungible(credit.forget_imbalance()),
+		});
+		let non_fungible = what
+			.non_fungible
+			.into_iter()
+			.map(|(id, instance)| Asset { id, fun: Fungibility::NonFungible(instance) });
+
+		for asset in fungible.chain(non_fungible) {
+			if failure.is_none() {
+				match deposit_one(&asset) {
+					Ok(()) => continue,
+					Err(err) => failure = Some(err),
+				}
+			}
+			undeposited.subsume_assets(eager_holding(&asset));
+		}
+
+		match failure {
+			Some(err) => Err((undeposited, err)),
+			None => Ok(()),
 		}
 	}
 
@@ -177,7 +263,7 @@ impl<
 				.map_err(|e| XcmError::FailedToTransactAsset(e.into()))
 		})?;
 
-		Ok(asset.clone().into())
+		Ok(eager_holding(asset))
 	}
 
 	fn transfer_asset(
@@ -185,7 +271,7 @@ impl<
 		from: &Location,
 		to: &Location,
 		_context: &XcmContext,
-	) -> result::Result<AssetsInHolding, XcmError> {
+	) -> result::Result<Asset, XcmError> {
 		let from_account =
 			AccountIdConvert::convert_location(from).ok_or_else(|| XcmError::from(Error::AccountIdConversionFailed))?;
 		let to_account =
@@ -204,6 +290,6 @@ impl<
 		)
 		.map_err(|e| XcmError::FailedToTransactAsset(e.into()))?;
 
-		Ok(asset.clone().into())
+		Ok(asset.clone())
 	}
 }
