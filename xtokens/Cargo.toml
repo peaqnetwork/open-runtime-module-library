@@ -51,6 +51,8 @@ xcm-simulator = { workspace = true }
 orml-tokens = { path = "../tokens" }
 orml-xcm = { path = "../xcm" }
 orml-xcm-mock-message-queue = { path = "../xcm-mock-message-queue" }
+# The test mocks use `MultiCurrencyAdapter`.
+orml-xcm-support = { path = "../xcm-support", features = ["currency-adapter"] }
 
 [features]
 default = [ "std" ]

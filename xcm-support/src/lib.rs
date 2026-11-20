@@ -21,9 +21,32 @@ use xcm_executor::traits::MatchesFungible;
 
 use orml_traits::{location::Reserve, GetByKey};
 
+// Behind the default-off `currency-adapter` feature; Cargo.toml says why and lists the composition
+// limits a runtime must keep if it turns the feature on.
+#[cfg(feature = "currency-adapter")]
 pub use currency_adapter::{DepositToAlternative, MultiCurrencyAdapter, OnDepositFail};
 
+#[cfg(feature = "currency-adapter")]
 mod currency_adapter;
+
+/// Without the `currency-adapter` feature, `MultiCurrencyAdapter` cannot be imported:
+///
+/// ```compile_fail,E0432
+/// use orml_xcm_support::MultiCurrencyAdapter;
+/// ```
+#[cfg(not(feature = "currency-adapter"))]
+#[allow(dead_code)]
+struct CurrencyAdapterIsOffByDefault;
+
+/// With the `currency-adapter` feature, `MultiCurrencyAdapter` can be imported. This checks the
+/// import path that the `compile_fail` test above expects to fail without the feature:
+///
+/// ```
+/// use orml_xcm_support::MultiCurrencyAdapter;
+/// ```
+#[cfg(feature = "currency-adapter")]
+#[allow(dead_code)]
+struct CurrencyAdapterIsOn;
 
 mod tests;
 

@@ -30,3 +30,43 @@ std = [
 	"xcm-executor/std",
 	"xcm/std",
 ]
+# Exports `MultiCurrencyAdapter` (src/currency_adapter.rs) and its `DepositToAlternative` and
+# `OnDepositFail` helpers. Off by default: without this feature the adapter does not exist.
+#
+# Why it is gated: on the stable2603 executor the holding register carries real imbalances, but
+# `MultiCurrency` moves balances straight away and has no imbalance to hand over. The entries this
+# adapter puts in holding are receipts (`EagerCredit`), and they share one untyped
+# `Box<dyn ImbalanceAccounting>` channel with real imbalances, which merge by amount alone. Nothing
+# checks how the adapter is composed, at compile time or at run time; a wrong `XcmConfig` makes total
+# issuance drift silently away from the sum of balances on every transfer whose assets pass between
+# the adapter and the conflicting component. peaq's runtimes do not use the adapter, so it is gated
+# rather than left one import away from any runtime that depends on this fork.
+#
+# Composition limits a runtime must keep if it turns this on:
+# - No other component in the same `XcmConfig` may place a real imbalance in holding under an
+#   `AssetId` this adapter's `Match` claims. That rules out `xcm_builder::UsingComponents` as the
+#   trader, `SingleAssetExchangeAdapter` as the `AssetExchanger`, and a second transactor (such as
+#   `FungiblesAdapter`) for the same assets. Use a trader that keeps `AssetsInHolding`, such as
+#   `FixedRateOfFungible`, and leave `AssetExchanger` unset.
+# - Put the adapter last in the transactor tuple, or use it alone. For an asset it cannot map,
+#   `deposit_asset` and `withdraw_asset` either fail with `FailedToTransactAsset`, not
+#   `AssetNotFound`, which stops the tuple, or hand the asset to a non-`()` `UnknownAsset`; either
+#   way a transactor after it never gets its turn. (`mint_asset` returns `AssetNotFound`, so the
+#   next transactor does get to try.)
+# - Keep `UnknownAsset = ()`. The unknown-asset branch is taken whenever any of the conversions
+#   fails: the destination does not convert to an account, the asset does not convert to a
+#   `CurrencyId`, or `Match` does not claim it. With any other `UnknownAsset` (such as
+#   orml-unknown-tokens):
+#   - a successful unknown deposit drops the holding entry it was handed; that is a no-op for the
+#     adapter's own receipts, but burns a real imbalance another component put there;
+#   - an unknown or non-fungible asset that was trapped and then claimed with `ClaimAsset` is lost:
+#     `mint_asset` rejects assets it cannot map, and pallet-xcm consumes the trap before the mint
+#     fails;
+#   - an unknown asset arriving by reserve transfer fails the message instead of landing in
+#     `UnknownAsset`, for the same reason.
+# - The adapter has no unit tests of its own; it is exercised only through the orml-xtokens
+#   simulator tests.
+#
+# This adapter is peaq's port to stable2603. Drop this port, and this feature, in favour of
+# upstream ORML's adapter once ORML moves to stable2603.
+currency-adapter = []

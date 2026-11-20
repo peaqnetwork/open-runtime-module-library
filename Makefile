@@ -45,8 +45,11 @@ dev-check: Cargo.toml check
 dev-check-tests: Cargo.toml
 	cargo check --tests --all
 
+# The second command runs orml-xcm-support's doctests on their own: in the workspace-wide run,
+# orml-xtokens' dev-dependency turns on `currency-adapter`, which skips the compile_fail doctest.
 dev-test: Cargo.toml
 	cargo test --all --features=runtime-benchmarks
+	cargo test -p orml-xcm-support --doc
 
 # Check feature formatting and propagation.
 dev-features-check:
